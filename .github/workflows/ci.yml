@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  build:
+    uses: PurgeBot-net/workflows/.github/workflows/build-library.yml@main
+    secrets: inherit
+
+  auto-label:
+    if: github.event_name == 'pull_request'
+    uses: PurgeBot-net/workflows/.github/workflows/auto-label.yaml@main
+    secrets: inherit
