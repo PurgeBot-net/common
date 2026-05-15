@@ -11,21 +11,13 @@ import (
 
 const (
 	QueueKey      = "purgebot:purge:queue"
-	lockKey       = "purgebot:purge:lock:%d"        // %d = guildID
+	activeJobKey  = "purgebot:purge:active:%d"      // %d = guildID
 	cancelKey     = "purgebot:purge:cancel:%s"      // %s = jobID
 	pendingJobKey = "purgebot:purge:pending:%d"     // %d = guildID
 	skipSelectKey = "purgebot:purge:skip_select:%d" // %d = guildID
 	pendingTTL    = 5 * time.Minute
 )
 
-// unlockScript atomically deletes the lock only if its value matches jobID.
-var unlockScript = redis.NewScript(`
-	if redis.call("get", KEYS[1]) == ARGV[1] then
-		return redis.call("del", KEYS[1])
-	else
-		return 0
-	end
-`)
 
 type PurgeType string
 
@@ -101,17 +93,45 @@ func Dequeue(ctx context.Context, rdb *redis.Client, timeout time.Duration) (*Pu
 	return &j, nil
 }
 
-func LockGuild(ctx context.Context, rdb *redis.Client, guildID uint64, jobID string, ttl time.Duration) (bool, error) {
-	return rdb.SetNX(ctx, fmt.Sprintf(lockKey, guildID), jobID, ttl).Result()
+// SetActiveJob atomically stores the job as the guild's active job.
+// Returns false without error if a job is already active for the guild.
+func SetActiveJob(ctx context.Context, rdb *redis.Client, j *PurgeJob) (bool, error) {
+	data, err := json.Marshal(j)
+	if err != nil {
+		return false, fmt.Errorf("marshal active job: %w", err)
+	}
+	return rdb.SetNX(ctx, fmt.Sprintf(activeJobKey, j.GuildID), data, 0).Result()
 }
 
-// UnlockGuild releases the guild lock only if it is still held by jobID.
-func UnlockGuild(ctx context.Context, rdb *redis.Client, guildID uint64, jobID string) error {
-	err := unlockScript.Run(ctx, rdb, []string{fmt.Sprintf(lockKey, guildID)}, jobID).Err()
-	if err == redis.Nil {
-		return nil
+// DeleteActiveJob removes the active job for a guild.
+func DeleteActiveJob(ctx context.Context, rdb *redis.Client, guildID uint64) {
+	rdb.Del(ctx, fmt.Sprintf(activeJobKey, guildID)) //nolint:errcheck
+}
+
+// GetAllActiveJobs returns all persisted active jobs across all guilds.
+// Used on worker startup to recover jobs that were interrupted by a crash.
+func GetAllActiveJobs(ctx context.Context, rdb *redis.Client) ([]*PurgeJob, error) {
+	var keys []string
+	iter := rdb.Scan(ctx, 0, "purgebot:purge:active:*", 0).Iterator()
+	for iter.Next(ctx) {
+		keys = append(keys, iter.Val())
 	}
-	return err
+	if err := iter.Err(); err != nil {
+		return nil, err
+	}
+	var jobs []*PurgeJob
+	for _, key := range keys {
+		data, err := rdb.Get(ctx, key).Bytes()
+		if err != nil {
+			continue
+		}
+		var j PurgeJob
+		if err := json.Unmarshal(data, &j); err != nil {
+			continue
+		}
+		jobs = append(jobs, &j)
+	}
+	return jobs, nil
 }
 
 func IsCancelled(ctx context.Context, rdb *redis.Client, jobID string) (bool, error) {

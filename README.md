@@ -18,7 +18,7 @@ err := job.Enqueue(ctx, rdb, &job.PurgeJob{ ... })
 j, err := job.Dequeue(ctx, rdb, 5*time.Second)
 
 // Acquire a per-guild lock (one active purge per guild)
-locked, err := job.LockGuild(ctx, rdb, guildID, jobID, 30*time.Minute)
+locked, err := job.LockGuild(ctx, rdb, guildID, jobID)
 job.UnlockGuild(ctx, rdb, guildID, jobID)
 
 // Cancel a running job
