@@ -64,10 +64,11 @@ type PurgeJob struct {
 	IncludeThreads   bool       `json:"include_threads"`
 	IncludeBots      bool       `json:"include_bots"`
 	SkipChannelIDs   []uint64   `json:"skip_channel_ids,omitempty"`
-	InteractionToken string     `json:"interaction_token"`
-	ApplicationID    uint64     `json:"application_id"`
-	RequestedByID    uint64     `json:"requested_by_id"`
-	CreatedAt        time.Time  `json:"created_at"`
+	InteractionToken     string     `json:"interaction_token"`
+	InteractionChannelID uint64     `json:"interaction_channel_id"`
+	ApplicationID        uint64     `json:"application_id"`
+	RequestedByID        uint64     `json:"requested_by_id"`
+	CreatedAt            time.Time  `json:"created_at"`
 }
 
 func Enqueue(ctx context.Context, rdb *redis.Client, j *PurgeJob) error {
