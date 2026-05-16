@@ -25,6 +25,7 @@ const (
 	PurgeTypeUser     PurgeType = "user"
 	PurgeTypeRole     PurgeType = "role"
 	PurgeTypeEveryone PurgeType = "everyone"
+	PurgeTypeBot      PurgeType = "bot"
 	PurgeTypeInactive PurgeType = "inactive"
 	PurgeTypeWebhook  PurgeType = "webhook"
 	PurgeTypeDeleted  PurgeType = "deleted"
