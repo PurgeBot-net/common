@@ -109,6 +109,22 @@ func DeleteActiveJob(ctx context.Context, rdb *redis.Client, guildID uint64) {
 	rdb.Del(ctx, fmt.Sprintf(activeJobKey, guildID)) //nolint:errcheck
 }
 
+// GetActiveJob returns the active job for a guild, or nil if none exists.
+func GetActiveJob(ctx context.Context, rdb *redis.Client, guildID uint64) (*PurgeJob, error) {
+	data, err := rdb.Get(ctx, fmt.Sprintf(activeJobKey, guildID)).Bytes()
+	if err == redis.Nil {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var j PurgeJob
+	if err := json.Unmarshal(data, &j); err != nil {
+		return nil, fmt.Errorf("unmarshal active job: %w", err)
+	}
+	return &j, nil
+}
+
 // GetAllActiveJobs returns all persisted active jobs across all guilds.
 // Used on worker startup to recover jobs that were interrupted by a crash.
 func GetAllActiveJobs(ctx context.Context, rdb *redis.Client) ([]*PurgeJob, error) {
