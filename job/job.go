@@ -14,10 +14,10 @@ const (
 	activeJobKey  = "purgebot:purge:active:%d"      // %d = guildID
 	cancelKey     = "purgebot:purge:cancel:%s"      // %s = jobID
 	pendingJobKey = "purgebot:purge:pending:%d"     // %d = guildID
+	progressKey   = "purgebot:purge:progress:%s"    // %s = jobID
 	skipSelectKey = "purgebot:purge:skip_select:%d" // %d = guildID
 	pendingTTL    = 5 * time.Minute
 )
-
 
 type PurgeType string
 
@@ -50,26 +50,51 @@ const (
 )
 
 type PurgeJob struct {
-	ID               string     `json:"id"`
-	GuildID          uint64     `json:"guild_id"`
-	Locale           string     `json:"locale"`
-	TargetID         uint64     `json:"target_id"`
-	TargetType       TargetType `json:"target_type"`
-	PurgeType        PurgeType  `json:"purge_type"`
-	FilterUserID     uint64     `json:"filter_user_id,omitempty"`
-	FilterRoleID     uint64     `json:"filter_role_id,omitempty"`
-	Days             int        `json:"days,omitempty"`
-	Filter           string     `json:"filter,omitempty"`
-	FilterMode       FilterMode `json:"filter_mode,omitempty"`
-	CaseSensitive    bool       `json:"case_sensitive"`
-	IncludeThreads   bool       `json:"include_threads"`
-	IncludeBots      bool       `json:"include_bots"`
-	SkipChannelIDs   []uint64   `json:"skip_channel_ids,omitempty"`
+	ID                   string     `json:"id"`
+	GuildID              uint64     `json:"guild_id"`
+	Locale               string     `json:"locale"`
+	TargetID             uint64     `json:"target_id"`
+	TargetType           TargetType `json:"target_type"`
+	PurgeType            PurgeType  `json:"purge_type"`
+	FilterUserID         uint64     `json:"filter_user_id,omitempty"`
+	FilterRoleID         uint64     `json:"filter_role_id,omitempty"`
+	Days                 int        `json:"days,omitempty"`
+	Filter               string     `json:"filter,omitempty"`
+	FilterMode           FilterMode `json:"filter_mode,omitempty"`
+	CaseSensitive        bool       `json:"case_sensitive"`
+	IncludeThreads       bool       `json:"include_threads"`
+	IncludeBots          bool       `json:"include_bots"`
+	SkipChannelIDs       []uint64   `json:"skip_channel_ids,omitempty"`
 	InteractionToken     string     `json:"interaction_token"`
 	InteractionChannelID uint64     `json:"interaction_channel_id"`
 	ApplicationID        uint64     `json:"application_id"`
 	RequestedByID        uint64     `json:"requested_by_id"`
 	CreatedAt            time.Time  `json:"created_at"`
+}
+
+type PurgeChannelProgress struct {
+	ChannelID uint64 `json:"channel_id"`
+	Deleted   int    `json:"deleted"`
+	Error     string `json:"error,omitempty"`
+	Done      bool   `json:"done"`
+}
+
+type PurgeProgress struct {
+	JobID             string                 `json:"job_id"`
+	GuildID           uint64                 `json:"guild_id"`
+	StartedAt         time.Time              `json:"started_at"`
+	CutoffAt          time.Time              `json:"cutoff_at,omitempty"`
+	ChannelIDs        []uint64               `json:"channel_ids"`
+	CurrentIndex      int                    `json:"current_index"`
+	BeforeID          uint64                 `json:"before_id,omitempty"`
+	TotalDeleted      int                    `json:"total_deleted"`
+	Channels          []PurgeChannelProgress `json:"channels"`
+	PendingChannelID  uint64                 `json:"pending_channel_id,omitempty"`
+	PendingDeleteIDs  []uint64               `json:"pending_delete_ids,omitempty"`
+	CommandMessageID  uint64                 `json:"command_message_id,omitempty"`
+	FallbackChannelID uint64                 `json:"fallback_channel_id,omitempty"`
+	FallbackMessageID uint64                 `json:"fallback_message_id,omitempty"`
+	UpdatedAt         time.Time              `json:"updated_at"`
 }
 
 func Enqueue(ctx context.Context, rdb *redis.Client, j *PurgeJob) error {
@@ -78,6 +103,14 @@ func Enqueue(ctx context.Context, rdb *redis.Client, j *PurgeJob) error {
 		return fmt.Errorf("marshal job: %w", err)
 	}
 	return rdb.LPush(ctx, QueueKey, data).Err()
+}
+
+func RemoveQueued(ctx context.Context, rdb *redis.Client, j *PurgeJob) error {
+	data, err := json.Marshal(j)
+	if err != nil {
+		return fmt.Errorf("marshal queued job: %w", err)
+	}
+	return rdb.LRem(ctx, QueueKey, 0, data).Err()
 }
 
 func Dequeue(ctx context.Context, rdb *redis.Client, timeout time.Duration) (*PurgeJob, error) {
@@ -159,6 +192,34 @@ func IsCancelled(ctx context.Context, rdb *redis.Client, jobID string) (bool, er
 
 func Cancel(ctx context.Context, rdb *redis.Client, jobID string) error {
 	return rdb.Set(ctx, fmt.Sprintf(cancelKey, jobID), 1, 30*time.Minute).Err()
+}
+
+func SaveProgress(ctx context.Context, rdb *redis.Client, p *PurgeProgress) error {
+	p.UpdatedAt = time.Now().UTC()
+	data, err := json.Marshal(p)
+	if err != nil {
+		return fmt.Errorf("marshal purge progress: %w", err)
+	}
+	return rdb.Set(ctx, fmt.Sprintf(progressKey, p.JobID), data, 0).Err()
+}
+
+func GetProgress(ctx context.Context, rdb *redis.Client, jobID string) (*PurgeProgress, error) {
+	data, err := rdb.Get(ctx, fmt.Sprintf(progressKey, jobID)).Bytes()
+	if err == redis.Nil {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var p PurgeProgress
+	if err := json.Unmarshal(data, &p); err != nil {
+		return nil, fmt.Errorf("unmarshal purge progress: %w", err)
+	}
+	return &p, nil
+}
+
+func DeleteProgress(ctx context.Context, rdb *redis.Client, jobID string) {
+	rdb.Del(ctx, fmt.Sprintf(progressKey, jobID)) //nolint:errcheck
 }
 
 // StorePendingJob stores a job awaiting skip-channel selection (TTL: 5 min).
