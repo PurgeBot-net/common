@@ -67,6 +67,7 @@ type PurgeJob struct {
 	IncludeBots          bool       `json:"include_bots"`
 	SkipChannelIDs       []uint64   `json:"skip_channel_ids,omitempty"`
 	SkipUserID           uint64     `json:"skip_user_id,omitempty"`
+	SkipMessageIDs       []uint64   `json:"skip_message_ids,omitempty"`
 	InteractionToken     string     `json:"interaction_token"`
 	InteractionChannelID uint64     `json:"interaction_channel_id"`
 	ApplicationID        uint64     `json:"application_id"`
