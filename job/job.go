@@ -61,10 +61,12 @@ type PurgeJob struct {
 	Days                 int        `json:"days,omitempty"`
 	Filter               string     `json:"filter,omitempty"`
 	FilterMode           FilterMode `json:"filter_mode,omitempty"`
+	FilterKeep           bool       `json:"filter_keep,omitempty"`
 	CaseSensitive        bool       `json:"case_sensitive"`
 	IncludeThreads       bool       `json:"include_threads"`
 	IncludeBots          bool       `json:"include_bots"`
 	SkipChannelIDs       []uint64   `json:"skip_channel_ids,omitempty"`
+	SkipUserID           uint64     `json:"skip_user_id,omitempty"`
 	InteractionToken     string     `json:"interaction_token"`
 	InteractionChannelID uint64     `json:"interaction_channel_id"`
 	ApplicationID        uint64     `json:"application_id"`
