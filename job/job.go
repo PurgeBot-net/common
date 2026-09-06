@@ -80,6 +80,8 @@ type PurgeChannelProgress struct {
 	Deleted   int    `json:"deleted"`
 	Error     string `json:"error,omitempty"`
 	Done      bool   `json:"done"`
+	BeforeID         uint64   `json:"before_id,omitempty"`
+	PendingDeleteIDs []uint64 `json:"pending_delete_ids,omitempty"`
 }
 
 type PurgeProgress struct {
@@ -88,12 +90,8 @@ type PurgeProgress struct {
 	StartedAt         time.Time              `json:"started_at"`
 	CutoffAt          time.Time              `json:"cutoff_at,omitempty"`
 	ChannelIDs        []uint64               `json:"channel_ids"`
-	CurrentIndex      int                    `json:"current_index"`
-	BeforeID          uint64                 `json:"before_id,omitempty"`
 	TotalDeleted      int                    `json:"total_deleted"`
 	Channels          []PurgeChannelProgress `json:"channels"`
-	PendingChannelID  uint64                 `json:"pending_channel_id,omitempty"`
-	PendingDeleteIDs  []uint64               `json:"pending_delete_ids,omitempty"`
 	CommandMessageID  uint64                 `json:"command_message_id,omitempty"`
 	FallbackChannelID uint64                 `json:"fallback_channel_id,omitempty"`
 	FallbackMessageID uint64                 `json:"fallback_message_id,omitempty"`
