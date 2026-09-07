@@ -76,10 +76,10 @@ type PurgeJob struct {
 }
 
 type PurgeChannelProgress struct {
-	ChannelID uint64 `json:"channel_id"`
-	Deleted   int    `json:"deleted"`
-	Error     string `json:"error,omitempty"`
-	Done      bool   `json:"done"`
+	ChannelID        uint64   `json:"channel_id"`
+	Deleted          int      `json:"deleted"`
+	Error            string   `json:"error,omitempty"`
+	Done             bool     `json:"done"`
 	BeforeID         uint64   `json:"before_id,omitempty"`
 	PendingDeleteIDs []uint64 `json:"pending_delete_ids,omitempty"`
 }
