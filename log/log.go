@@ -29,7 +29,9 @@ func New(level string, json bool) (*zap.Logger, error) {
 		cfg = zap.NewDevelopmentConfig()
 	}
 	cfg.Level = zap.NewAtomicLevelAt(lvl)
-	return cfg.Build()
+	// The console preset is a development config, which zap reads as "stacktrace from Warn
+	// up". Options passed to Build are applied after cfg.buildOptions, so this overrides it.
+	return cfg.Build(zap.AddStacktrace(zapcore.ErrorLevel))
 }
 
 func WithSentry(logger *zap.Logger, dsn string) *zap.Logger {
