@@ -1,6 +1,6 @@
 module github.com/PurgeBot-net/common
 
-go 1.26
+go 1.26.0
 
 require (
 	github.com/getsentry/sentry-go v0.46.2
@@ -10,8 +10,9 @@ require (
 
 require (
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
+	github.com/stretchr/testify v1.10.0 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
-	golang.org/x/sys v0.30.0 // indirect
-	golang.org/x/text v0.14.0 // indirect
+	golang.org/x/sys v0.49.0 // indirect
+	golang.org/x/text v0.43.0 // indirect
 )
