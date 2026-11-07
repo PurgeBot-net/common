@@ -9,8 +9,9 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// disgo puts raw HTTP bodies and gateway frames under these keys.
-var droppedKeys = map[string]bool{"body": true, "data": true}
+// disgo puts raw HTTP bodies and gateway frames under body and data, and the compiled
+// request URL, which embeds interaction tokens and user IDs, under endpoint.
+var droppedKeys = map[string]bool{"body": true, "data": true, "endpoint": true}
 
 // disgo also formats whole payloads into error strings, which no key rule catches.
 const maxAttrLen = 512
@@ -27,7 +28,7 @@ type slogHandler struct {
 }
 
 func (h *slogHandler) Enabled(_ context.Context, lvl slog.Level) bool {
-	return h.logger.Core().Enabled(zapLevel(lvl))
+	return h.logger.Core().Enabled(bridgeLevel(lvl))
 }
 
 func (h *slogHandler) Handle(_ context.Context, r slog.Record) error {
@@ -37,10 +38,16 @@ func (h *slogHandler) Handle(_ context.Context, r slog.Record) error {
 		fields = appendAttr(fields, h.prefix, a)
 		return true
 	})
-	if ce := h.logger.Check(zapLevel(r.Level), r.Message); ce != nil {
+	if ce := h.logger.Check(bridgeLevel(r.Level), r.Message); ce != nil {
 		ce.Write(fields...)
 	}
 	return nil
+}
+
+// Capped at Warn: disgo logs handled conditions such as gateway reconnects at Error, which
+// would otherwise flood Sentry.
+func bridgeLevel(lvl slog.Level) zapcore.Level {
+	return min(zapLevel(lvl), zapcore.WarnLevel)
 }
 
 func (h *slogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
@@ -83,7 +90,8 @@ func appendAttr(fields []zap.Field, prefix string, a slog.Attr) []zap.Field {
 	if droppedKeys[a.Key] {
 		return fields
 	}
-	if s := a.Value.String(); len(s) > maxAttrLen {
+	// A stack trace holds frames, not payloads, and is useless cut short.
+	if s := a.Value.String(); len(s) > maxAttrLen && a.Key != "stack" {
 		return append(fields, zap.String(prefix+a.Key, fmt.Sprintf("<elided %d bytes>", len(s))))
 	}
 	return append(fields, zap.Any(prefix+a.Key, a.Value.Any()))
