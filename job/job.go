@@ -62,6 +62,7 @@ type PurgeJob struct {
 	Filter               string     `json:"filter,omitempty"`
 	FilterMode           FilterMode `json:"filter_mode,omitempty"`
 	FilterKeep           bool       `json:"filter_keep,omitempty"`
+	FlaggedMedia         bool       `json:"flagged_media,omitempty"`
 	CaseSensitive        bool       `json:"case_sensitive"`
 	IncludeThreads       bool       `json:"include_threads"`
 	IncludeBots          bool       `json:"include_bots"`

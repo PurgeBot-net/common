@@ -2,8 +2,10 @@ package log
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -15,6 +17,11 @@ var droppedKeys = map[string]bool{"body": true, "data": true, "endpoint": true}
 
 // disgo also formats whole payloads into error strings, which no key rule catches.
 const maxAttrLen = 512
+
+// disgo's exact log text for a gateway frame it skipped; only the first per process is raised to Error.
+const droppedFrameMsg = "error while parsing gateway message"
+
+var droppedFrameReported atomic.Bool
 
 // Slog routes a library's slog output into zap, redacting raw payloads.
 func Slog(logger *zap.Logger) *slog.Logger {
@@ -28,7 +35,8 @@ type slogHandler struct {
 }
 
 func (h *slogHandler) Enabled(_ context.Context, lvl slog.Level) bool {
-	return h.logger.Core().Enabled(bridgeLevel(lvl))
+	// Uncapped, so the record Handle raises to Error survives LOG_LEVEL=error; Handle caps the rest.
+	return h.logger.Core().Enabled(zapLevel(lvl))
 }
 
 func (h *slogHandler) Handle(_ context.Context, r slog.Record) error {
@@ -38,7 +46,11 @@ func (h *slogHandler) Handle(_ context.Context, r slog.Record) error {
 		fields = appendAttr(fields, h.prefix, a)
 		return true
 	})
-	if ce := h.logger.Check(bridgeLevel(r.Level), r.Message); ce != nil {
+	lvl := bridgeLevel(r.Level)
+	if r.Message == droppedFrameMsg && droppedFrameReported.CompareAndSwap(false, true) {
+		lvl = zapcore.ErrorLevel
+	}
+	if ce := h.logger.Check(lvl, r.Message); ce != nil {
 		ce.Write(fields...)
 	}
 	return nil
@@ -92,7 +104,17 @@ func appendAttr(fields []zap.Field, prefix string, a slog.Attr) []zap.Field {
 	}
 	// A stack trace holds frames, not payloads, and is useless cut short.
 	if s := a.Value.String(); len(s) > maxAttrLen && a.Key != "stack" {
-		return append(fields, zap.String(prefix+a.Key, fmt.Sprintf("<elided %d bytes>", len(s))))
+		elided := fmt.Sprintf("<elided %d bytes>", len(s))
+		// disgo wraps decode errors around the raw frame and payload; only the innermost error is free of both.
+		if err, ok := a.Value.Any().(error); ok {
+			for next := errors.Unwrap(err); next != nil; next = errors.Unwrap(next) {
+				err = next
+			}
+			if cause := err.Error(); len(cause) <= maxAttrLen {
+				elided += ": " + cause
+			}
+		}
+		return append(fields, zap.String(prefix+a.Key, elided))
 	}
 	return append(fields, zap.Any(prefix+a.Key, a.Value.Any()))
 }
