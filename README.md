@@ -24,6 +24,10 @@ job.DeleteActiveJob(ctx, rdb, guildID)
 // Cancel a running job
 job.Cancel(ctx, rdb, jobID)
 job.IsCancelled(ctx, rdb, jobID)
+
+// Find and delete the purge keys of guilds PurgeBot has left
+ids, err := job.GuildIDs(ctx, rdb)
+err = job.DeleteGuilds(ctx, rdb, ids)
 ```
 
 ### `log`

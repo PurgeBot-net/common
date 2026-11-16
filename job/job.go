@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -277,4 +279,64 @@ func GetSkipSelection(ctx context.Context, rdb *redis.Client, guildID uint64) ([
 		return nil, err
 	}
 	return ids, nil
+}
+
+// GuildIDs returns every guild that has an active job or a progress checkpoint, orphaned ones included.
+func GuildIDs(ctx context.Context, rdb *redis.Client) ([]uint64, error) {
+	seen := make(map[uint64]struct{})
+	for _, pattern := range []string{"purgebot:purge:active:*", "purgebot:purge:progress:*"} {
+		iter := rdb.Scan(ctx, 0, pattern, 1000).Iterator()
+		for iter.Next(ctx) {
+			if id, ok := keyGuildID(iter.Val()); ok {
+				seen[id] = struct{}{}
+			}
+		}
+		if err := iter.Err(); err != nil {
+			return nil, err
+		}
+	}
+	ids := make([]uint64, 0, len(seen))
+	for id := range seen {
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// DeleteGuilds leaves a queued copy to the worker, which drops a job whose active key is gone.
+func DeleteGuilds(ctx context.Context, rdb *redis.Client, guildIDs []uint64) error {
+	if len(guildIDs) == 0 {
+		return nil
+	}
+	want := make(map[uint64]struct{}, len(guildIDs))
+	keys := make([]string, 0, 3*len(guildIDs))
+	for _, id := range guildIDs {
+		want[id] = struct{}{}
+		keys = append(keys, fmt.Sprintf(activeJobKey, id), fmt.Sprintf(pendingJobKey, id), fmt.Sprintf(skipSelectKey, id))
+	}
+	iter := rdb.Scan(ctx, 0, "purgebot:purge:progress:*", 1000).Iterator()
+	for iter.Next(ctx) {
+		if id, ok := keyGuildID(iter.Val()); ok {
+			if _, hit := want[id]; hit {
+				keys = append(keys, iter.Val())
+			}
+		}
+	}
+	if err := iter.Err(); err != nil {
+		return err
+	}
+	return rdb.Del(ctx, keys...).Err()
+}
+
+// keyGuildID reads the guild from an active key, or from the "<guildID>-<nanos>" job ID of a progress key.
+func keyGuildID(key string) (uint64, bool) {
+	var id string
+	if rest, ok := strings.CutPrefix(key, "purgebot:purge:active:"); ok {
+		id = rest
+	} else if rest, ok := strings.CutPrefix(key, "purgebot:purge:progress:"); ok {
+		id, _, _ = strings.Cut(rest, "-")
+	} else {
+		return 0, false
+	}
+	n, err := strconv.ParseUint(id, 10, 64)
+	return n, err == nil
 }
