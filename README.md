@@ -32,7 +32,7 @@ err = job.DeleteGuilds(ctx, rdb, ids)
 
 ### `log`
 
-Zap logger with optional Sentry integration.
+Zap logger with optional Sentry-compatible error reporting.
 
 ```go
 import "github.com/PurgeBot-net/common/log"
