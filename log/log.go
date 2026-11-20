@@ -81,7 +81,7 @@ func (s *sentryCore) Check(e zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.C
 }
 
 func (s *sentryCore) Write(e zapcore.Entry, fields []zapcore.Field) error {
-	cause, tags, extra := splitFields(append(slices.Clip(s.fields), fields...))
+	tags, extra, cause := splitFields(append(slices.Clip(s.fields), fields...))
 
 	// Cloned per event: WithScope pushes and pops on the hub, and Write is concurrent.
 	hub := sentry.CurrentHub().Clone()
@@ -103,7 +103,7 @@ func (s *sentryCore) Write(e zapcore.Entry, fields []zapcore.Field) error {
 
 // An error field encodes to its string form, so the value is taken off the raw field
 // to survive as an exception. NamedError keeps its own key and stays context.
-func splitFields(fields []zapcore.Field) (error, map[string]string, sentry.Context) {
+func splitFields(fields []zapcore.Field) (map[string]string, sentry.Context, error) {
 	var cause error
 	enc := zapcore.NewMapObjectEncoder()
 	for _, f := range fields {
@@ -125,7 +125,7 @@ func splitFields(fields []zapcore.Field) (error, map[string]string, sentry.Conte
 		}
 		extra[k] = v
 	}
-	return cause, tags, extra
+	return tags, extra, cause
 }
 
 func sentryLevel(lvl zapcore.Level) sentry.Level {

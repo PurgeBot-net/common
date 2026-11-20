@@ -91,7 +91,7 @@ type PurgeProgress struct {
 	JobID             string                 `json:"job_id"`
 	GuildID           uint64                 `json:"guild_id"`
 	StartedAt         time.Time              `json:"started_at"`
-	CutoffAt          time.Time              `json:"cutoff_at,omitempty"`
+	CutoffAt          time.Time              `json:"cutoff_at,omitzero"`
 	ChannelIDs        []uint64               `json:"channel_ids"`
 	TotalDeleted      int                    `json:"total_deleted"`
 	Channels          []PurgeChannelProgress `json:"channels"`
