@@ -1,12 +1,12 @@
 # common
 
-Shared library for PurgeBot services. Contains the purge job definition, Redis queue helpers, and logging setup.
+Shared library for PurgeBot services. Contains the purge job definition, Redis queue helpers, a Redis client constructor, and logging setup.
 
 ## Packages
 
 ### `job`
 
-Purge job type, Redis queue operations, and guild locking.
+Purge job type, Redis queue operations, guild locking, cancel flags, progress checkpoints, and pending skip-channel selections.
 
 ```go
 import "github.com/PurgeBot-net/common/job"
@@ -32,13 +32,14 @@ err = job.DeleteGuilds(ctx, rdb, ids)
 
 ### `log`
 
-Zap logger with optional Sentry-compatible error reporting.
+Zap logger with optional Sentry-compatible error reporting, and a `slog` bridge that routes a library's logs into it with raw payloads redacted.
 
 ```go
 import "github.com/PurgeBot-net/common/log"
 
 logger, err := log.New(os.Getenv("LOG_LEVEL"), os.Getenv("LOG_JSON") == "true")
 logger = log.WithSentry(logger, os.Getenv("SENTRY_DSN"))
+client, err := disgo.New(token, bot.WithLogger(log.Slog(logger)))
 ```
 
 ### `rdb`
