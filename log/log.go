@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/getsentry/sentry-go"
@@ -15,6 +16,17 @@ const sentryFlushTimeout = 2 * time.Second
 
 // Promoted to Sentry tags, which are filterable; every other field becomes context.
 var sentryTagKeys = []string{"job_id", "guild_id", "channel_id", "purge_type", "target_type"}
+
+type Config struct {
+	SentryDSN string `env:"SENTRY_DSN"`
+	Level     string `env:"LOG_LEVEL" envDefault:"info"`
+	JSON      bool   `env:"LOG_JSON"`
+}
+
+// Snowflakes exceed 2^53, so a JSON reader using float64 corrupts them as numbers.
+func ID(key string, id uint64) zap.Field {
+	return zap.String(key, strconv.FormatUint(id, 10))
+}
 
 func New(level string, json bool) (*zap.Logger, error) {
 	var lvl zapcore.Level
@@ -83,21 +95,20 @@ func (s *sentryCore) Check(e zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.C
 func (s *sentryCore) Write(e zapcore.Entry, fields []zapcore.Field) error {
 	tags, extra, cause := splitFields(append(slices.Clip(s.fields), fields...))
 
-	// Cloned per event: WithScope pushes and pops on the hub, and Write is concurrent.
+	// Cloned per event: Write is concurrent and mutates the scope.
 	hub := sentry.CurrentHub().Clone()
-	hub.WithScope(func(scope *sentry.Scope) {
-		scope.SetLevel(sentryLevel(e.Level))
-		scope.SetTags(tags)
-		if len(extra) > 0 {
-			scope.SetContext("log", extra)
-		}
-		if cause == nil {
-			hub.CaptureMessage(e.Message)
-			return
-		}
-		// Wrapped so issues group on the message too, not just the error type.
-		hub.CaptureException(fmt.Errorf("%s: %w", e.Message, cause))
-	})
+	scope := hub.Scope()
+	scope.SetLevel(sentryLevel(e.Level))
+	scope.SetTags(tags)
+	if len(extra) > 0 {
+		scope.SetContext("log", extra)
+	}
+	if cause == nil {
+		hub.CaptureMessage(e.Message)
+		return nil
+	}
+	// Wrapped so issues group on the message too, not just the error type.
+	hub.CaptureException(fmt.Errorf("%s: %w", e.Message, cause))
 	return nil
 }
 
@@ -128,15 +139,10 @@ func splitFields(fields []zapcore.Field) (map[string]string, sentry.Context, err
 	return tags, extra, cause
 }
 
+// Only Error and above reach Write, so nothing maps to a lower Sentry level.
 func sentryLevel(lvl zapcore.Level) sentry.Level {
-	switch {
-	case lvl >= zapcore.PanicLevel:
+	if lvl >= zapcore.PanicLevel {
 		return sentry.LevelFatal
-	case lvl >= zapcore.ErrorLevel:
-		return sentry.LevelError
-	case lvl >= zapcore.WarnLevel:
-		return sentry.LevelWarning
-	default:
-		return sentry.LevelInfo
 	}
+	return sentry.LevelError
 }

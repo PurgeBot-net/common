@@ -3,7 +3,9 @@ package job
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -12,14 +14,21 @@ import (
 )
 
 const (
-	QueueKey      = "purgebot:purge:queue"
-	activeJobKey  = "purgebot:purge:active:%d"      // %d = guildID
-	cancelKey     = "purgebot:purge:cancel:%s"      // %s = jobID
-	pendingJobKey = "purgebot:purge:pending:%d"     // %d = guildID
-	progressKey   = "purgebot:purge:progress:%s"    // %s = jobID
-	skipSelectKey = "purgebot:purge:skip_select:%d" // %d = guildID
-	pendingTTL    = 5 * time.Minute
+	queueKey        = "purgebot:purge:queue"
+	activeJobPrefix = "purgebot:purge:active:"
+	progressPrefix  = "purgebot:purge:progress:"
+	activeJobKey    = activeJobPrefix + "%d"          // %d = guildID
+	cancelKey       = "purgebot:purge:cancel:%s"      // %s = jobID
+	pendingJobKey   = "purgebot:purge:pending:%d"     // %d = guildID
+	progressKey     = progressPrefix + "%s"           // %s = jobID
+	skipSelectKey   = "purgebot:purge:skip_select:%d" // %d = guildID
+	pendingTTL      = 5 * time.Minute
+	// Outlives any queue wait or purger outage, so the purger still sees a cancel issued before the job started.
+	cancelTTL = 7 * 24 * time.Hour
+	scanCount = 1000
 )
+
+const CancelButtonPrefix = "cancel:"
 
 type PurgeType string
 
@@ -89,7 +98,6 @@ type PurgeChannelProgress struct {
 
 type PurgeProgress struct {
 	JobID             string                 `json:"job_id"`
-	GuildID           uint64                 `json:"guild_id"`
 	StartedAt         time.Time              `json:"started_at"`
 	CutoffAt          time.Time              `json:"cutoff_at,omitzero"`
 	ChannelIDs        []uint64               `json:"channel_ids"`
@@ -106,7 +114,7 @@ func Enqueue(ctx context.Context, rdb *redis.Client, j *PurgeJob) error {
 	if err != nil {
 		return fmt.Errorf("marshal job: %w", err)
 	}
-	return rdb.LPush(ctx, QueueKey, data).Err()
+	return rdb.LPush(ctx, queueKey, data).Err()
 }
 
 func RemoveQueued(ctx context.Context, rdb *redis.Client, j *PurgeJob) error {
@@ -114,11 +122,11 @@ func RemoveQueued(ctx context.Context, rdb *redis.Client, j *PurgeJob) error {
 	if err != nil {
 		return fmt.Errorf("marshal queued job: %w", err)
 	}
-	return rdb.LRem(ctx, QueueKey, 0, data).Err()
+	return rdb.LRem(ctx, queueKey, 0, data).Err()
 }
 
 func Dequeue(ctx context.Context, rdb *redis.Client, timeout time.Duration) (*PurgeJob, error) {
-	result, err := rdb.BRPop(ctx, timeout, QueueKey).Result()
+	result, err := rdb.BRPop(ctx, timeout, queueKey).Result()
 	if err == redis.Nil {
 		return nil, nil
 	}
@@ -142,9 +150,9 @@ func SetActiveJob(ctx context.Context, rdb *redis.Client, j *PurgeJob) (bool, er
 	return rdb.SetNX(ctx, fmt.Sprintf(activeJobKey, j.GuildID), data, 0).Result()
 }
 
-// DeleteActiveJob removes the active job for a guild.
-func DeleteActiveJob(ctx context.Context, rdb *redis.Client, guildID uint64) {
-	rdb.Del(ctx, fmt.Sprintf(activeJobKey, guildID)) //nolint:errcheck
+// One DEL: an active key left without its checkpoint would be purged again from scratch on restart.
+func DeleteActiveJob(ctx context.Context, rdb *redis.Client, j PurgeJob) {
+	rdb.Del(ctx, fmt.Sprintf(activeJobKey, j.GuildID), fmt.Sprintf(progressKey, j.ID)) //nolint:errcheck
 }
 
 // GetActiveJob returns the active job for a guild, or nil if none exists.
@@ -163,30 +171,36 @@ func GetActiveJob(ctx context.Context, rdb *redis.Client, guildID uint64) (*Purg
 	return &j, nil
 }
 
-// GetAllActiveJobs returns all persisted active jobs across all guilds.
-// Used on worker startup to recover jobs that were interrupted by a crash.
-func GetAllActiveJobs(ctx context.Context, rdb *redis.Client) ([]*PurgeJob, error) {
+// GetAllActiveJobs returns the active jobs oldest first, plus a joined error for keys it could not read.
+func GetAllActiveJobs(ctx context.Context, rdb *redis.Client) ([]PurgeJob, error) {
 	var keys []string
-	iter := rdb.Scan(ctx, 0, "purgebot:purge:active:*", 0).Iterator()
+	iter := rdb.Scan(ctx, 0, activeJobPrefix+"*", scanCount).Iterator()
 	for iter.Next(ctx) {
 		keys = append(keys, iter.Val())
 	}
 	if err := iter.Err(); err != nil {
 		return nil, err
 	}
-	var jobs []*PurgeJob
+	var jobs []PurgeJob
+	var errs []error
 	for _, key := range keys {
 		data, err := rdb.Get(ctx, key).Bytes()
+		if err == redis.Nil {
+			continue
+		}
 		if err != nil {
+			errs = append(errs, fmt.Errorf("get %s: %w", key, err))
 			continue
 		}
 		var j PurgeJob
 		if err := json.Unmarshal(data, &j); err != nil {
+			errs = append(errs, fmt.Errorf("unmarshal %s: %w", key, err))
 			continue
 		}
-		jobs = append(jobs, &j)
+		jobs = append(jobs, j)
 	}
-	return jobs, nil
+	slices.SortFunc(jobs, func(a, b PurgeJob) int { return a.CreatedAt.Compare(b.CreatedAt) })
+	return jobs, errors.Join(errs...)
 }
 
 func IsCancelled(ctx context.Context, rdb *redis.Client, jobID string) (bool, error) {
@@ -195,7 +209,7 @@ func IsCancelled(ctx context.Context, rdb *redis.Client, jobID string) (bool, er
 }
 
 func Cancel(ctx context.Context, rdb *redis.Client, jobID string) error {
-	return rdb.Set(ctx, fmt.Sprintf(cancelKey, jobID), 1, 30*time.Minute).Err()
+	return rdb.Set(ctx, fmt.Sprintf(cancelKey, jobID), 1, cancelTTL).Err()
 }
 
 func SaveProgress(ctx context.Context, rdb *redis.Client, p *PurgeProgress) error {
@@ -220,10 +234,6 @@ func GetProgress(ctx context.Context, rdb *redis.Client, jobID string) (*PurgePr
 		return nil, fmt.Errorf("unmarshal purge progress: %w", err)
 	}
 	return &p, nil
-}
-
-func DeleteProgress(ctx context.Context, rdb *redis.Client, jobID string) {
-	rdb.Del(ctx, fmt.Sprintf(progressKey, jobID)) //nolint:errcheck
 }
 
 // StorePendingJob stores a job awaiting skip-channel selection (TTL: 5 min).
@@ -252,8 +262,8 @@ func GetPendingJob(ctx context.Context, rdb *redis.Client, guildID uint64) (*Pur
 }
 
 // DeletePendingJob removes the pending job and skip selection for a guild.
-func DeletePendingJob(ctx context.Context, rdb *redis.Client, guildID uint64) {
-	_ = rdb.Del(ctx, fmt.Sprintf(pendingJobKey, guildID), fmt.Sprintf(skipSelectKey, guildID)).Err()
+func DeletePendingJob(ctx context.Context, rdb *redis.Client, guildID uint64) error {
+	return rdb.Del(ctx, fmt.Sprintf(pendingJobKey, guildID), fmt.Sprintf(skipSelectKey, guildID)).Err()
 }
 
 // StoreSkipSelection stores the selected channel IDs for a pending skip-channels flow.
@@ -284,8 +294,8 @@ func GetSkipSelection(ctx context.Context, rdb *redis.Client, guildID uint64) ([
 // GuildIDs returns every guild that has an active job or a progress checkpoint, orphaned ones included.
 func GuildIDs(ctx context.Context, rdb *redis.Client) ([]uint64, error) {
 	seen := make(map[uint64]struct{})
-	for _, pattern := range []string{"purgebot:purge:active:*", "purgebot:purge:progress:*"} {
-		iter := rdb.Scan(ctx, 0, pattern, 1000).Iterator()
+	for _, prefix := range []string{activeJobPrefix, progressPrefix} {
+		iter := rdb.Scan(ctx, 0, prefix+"*", scanCount).Iterator()
 		for iter.Next(ctx) {
 			if id, ok := keyGuildID(iter.Val()); ok {
 				seen[id] = struct{}{}
@@ -313,7 +323,7 @@ func DeleteGuilds(ctx context.Context, rdb *redis.Client, guildIDs []uint64) err
 		want[id] = struct{}{}
 		keys = append(keys, fmt.Sprintf(activeJobKey, id), fmt.Sprintf(pendingJobKey, id), fmt.Sprintf(skipSelectKey, id))
 	}
-	iter := rdb.Scan(ctx, 0, "purgebot:purge:progress:*", 1000).Iterator()
+	iter := rdb.Scan(ctx, 0, progressPrefix+"*", scanCount).Iterator()
 	for iter.Next(ctx) {
 		if id, ok := keyGuildID(iter.Val()); ok {
 			if _, hit := want[id]; hit {
@@ -330,13 +340,30 @@ func DeleteGuilds(ctx context.Context, rdb *redis.Client, guildIDs []uint64) err
 // keyGuildID reads the guild from an active key, or from the "<guildID>-<nanos>" job ID of a progress key.
 func keyGuildID(key string) (uint64, bool) {
 	var id string
-	if rest, ok := strings.CutPrefix(key, "purgebot:purge:active:"); ok {
+	if rest, ok := strings.CutPrefix(key, activeJobPrefix); ok {
 		id = rest
-	} else if rest, ok := strings.CutPrefix(key, "purgebot:purge:progress:"); ok {
+	} else if rest, ok := strings.CutPrefix(key, progressPrefix); ok {
 		id, _, _ = strings.Cut(rest, "-")
 	} else {
 		return 0, false
 	}
 	n, err := strconv.ParseUint(id, 10, 64)
 	return n, err == nil
+}
+
+// NewID returns "<guildID>-<nanos>"; keyGuildID reads the guild back from it.
+func NewID(guildID uint64, now time.Time) string {
+	return fmt.Sprintf("%d-%d", guildID, now.UnixNano())
+}
+
+// CancelButtonID must keep its format: buttons already posted on status messages carry it.
+func CancelButtonID(jobID string, requestedByID uint64) string {
+	return fmt.Sprintf("%s%s:%d", CancelButtonPrefix, jobID, requestedByID)
+}
+
+// ParseCancelButtonID returns requester 0, which only the guild owner passes, when the ID carries none.
+func ParseCancelButtonID(customID string) (jobID string, requestedByID uint64) {
+	jobID, requester, _ := strings.Cut(strings.TrimPrefix(customID, CancelButtonPrefix), ":")
+	requestedByID, _ = strconv.ParseUint(requester, 10, 64)
+	return jobID, requestedByID
 }

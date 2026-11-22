@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"sync/atomic"
 
 	"go.uber.org/zap"
@@ -20,6 +21,9 @@ const maxAttrLen = 512
 
 // disgo's exact log text for a gateway frame it skipped; only the first per process is raised to Error.
 const droppedFrameMsg = "error while parsing gateway message"
+
+// disgo's exact log text for a panic it recovered in an event listener; always raised to Error.
+const listenerPanicMsg = "recovered from panic in event listener"
 
 var droppedFrameReported atomic.Bool
 
@@ -47,12 +51,20 @@ func (h *slogHandler) Handle(_ context.Context, r slog.Record) error {
 		return true
 	})
 	lvl := bridgeLevel(r.Level)
-	if r.Message == droppedFrameMsg && droppedFrameReported.CompareAndSwap(false, true) {
+	if r.Message == listenerPanicMsg || (r.Message == droppedFrameMsg && droppedFrameReported.CompareAndSwap(false, true)) {
 		lvl = zapcore.ErrorLevel
 	}
-	if ce := h.logger.Check(lvl, r.Message); ce != nil {
-		ce.Write(fields...)
+	ce := h.logger.Check(lvl, r.Message)
+	if ce == nil {
+		return nil
 	}
+	// zap resolved the caller to this bridge; r.PC is the library's call site.
+	if ce.Caller.Defined && r.PC != 0 {
+		if f, _ := runtime.CallersFrames([]uintptr{r.PC}).Next(); f.PC != 0 {
+			ce.Caller = zapcore.EntryCaller{Defined: true, PC: f.PC, File: f.File, Line: f.Line, Function: f.Function}
+		}
+	}
+	ce.Write(fields...)
 	return nil
 }
 
